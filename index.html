@@ -268,9 +268,10 @@ let session = null;     // {username, role}
 
 /* ════════════════════════════════════════════════════════════════════
    CLOUD SYNC — Supabase (data dikongsi secara live semua pengguna)
-   Setup: Admin pergi ke Tab "Muat Naik" → bahagian "Cloud Sync"
-   Table Supabase: rkb_state  (id text PK, data jsonb, updated_by text, updated_at timestamptz)
+   Credentials di-hardcode — auto-connect tanpa perlu setup.
    ════════════════════════════════════════════════════════════════════ */
+const _SB_URL = 'https://tiewqiizkcxwthpxufqf.supabase.co';
+const _SB_KEY = 'sb_publishable_tmPMc6x59DLe0GtcC4mBww_zj5sOFXt';
 const CLOUD_KEY = 'rkb_cloud_v2';
 let _cloudTimer  = null;   // debounce push
 let _cloudPoll   = null;   // polling interval
@@ -278,7 +279,7 @@ let _lastPullAt  = '';     // timestamp cloud terakhir ditarik
 let _realtimeCh  = null;   // supabase realtime channel
 
 function getCloudCfg(){
-  // 1. Config di-embed dalam HTML (oleh Admin — disebarkan ke semua pengguna)
+  // 1. Override: embedded dalam HTML (oleh Admin via Simpan Kekal)
   try{
     const emb=document.getElementById('__sb_cfg__');
     if(emb&&emb.textContent.trim()){
@@ -286,8 +287,13 @@ function getCloudCfg(){
       if(c&&c.url&&c.key) return c;
     }
   }catch(e){}
-  // 2. Config dalam localStorage (semasa konfigurasi)
-  try{ return JSON.parse(localStorage.getItem(CLOUD_KEY))||{}; }catch(e){ return {}; }
+  // 2. Override: localStorage (dikonfigurasi semasa sesi)
+  try{
+    const ls=JSON.parse(localStorage.getItem(CLOUD_KEY)||'null');
+    if(ls&&ls.url&&ls.key) return ls;
+  }catch(e){}
+  // 3. Default hardcoded — sentiasa aktif untuk semua pengguna
+  return {url:_SB_URL, key:_SB_KEY};
 }
 function setCloudCfg(obj){
   localStorage.setItem(CLOUD_KEY, JSON.stringify(obj));
@@ -802,31 +808,35 @@ function buildShell(){
   const tabs=tabsForRole();
   $('#sbNav').innerHTML=tabs.map(t=>`<a href="#" data-tab="${t.id}">${icon(t.icon)} <span>${esc(t.label)}</span></a>`).join('');
   $$('#sbNav a').forEach(a=>a.addEventListener('click',e=>{e.preventDefault(); go(a.dataset.tab); if(window.innerWidth<=960){$('#sidebar').classList.remove('open');$('#backdrop').classList.remove('show');}}));
-  // Cloud indicator (semua peranan)
+
+  // Bersihkan topbar extras dari sesi sebelum
+  ['#cloudInd','#btnSimpanKekal','#keepSaveWrap'].forEach(id=>{ const el=$(id); if(el&&el.parentNode) el.parentNode.removeChild(el); });
+
+  const who=$('.topbar .who');
+  if(!who) { go(tabs[0].id); return; }
+
+  // ── Cloud indicator (SEMUA peranan) ──────────────────────────────
   const cfg=getCloudCfg();
   if(cfg&&cfg.url&&cfg.key){
-    const who=$('.topbar .who');
-    if(who&&!$('#cloudInd')){
-      const ci=document.createElement('span');
-      ci.id='cloudInd';
-      ci.style.cssText='display:flex;align-items:center;gap:3px;font-size:.72rem;font-weight:600;padding:3px 9px;background:var(--bg2);border-radius:20px;cursor:default;white-space:nowrap';
-      ci.title='Status Cloud Sync';
-      ci.innerHTML='<span id="cloudDot" style="font-size:.5rem">●</span><span id="cloudTxt"> Menghubung…</span>';
-      who.insertBefore(ci, who.querySelector('#saveInd')||who.firstChild);
-    }
+    const ci=document.createElement('span');
+    ci.id='cloudInd';
+    ci.style.cssText='display:flex;align-items:center;gap:3px;font-size:.7rem;font-weight:600;padding:3px 9px;background:var(--bg2);border-radius:20px;cursor:default;white-space:nowrap';
+    ci.title='Status Cloud Sync — Supabase';
+    ci.innerHTML='<span id="cloudDot" style="font-size:.5rem;color:#888">○</span><span id="cloudTxt" style="color:var(--ink-soft)"> Menghubung…</span>';
+    who.insertBefore(ci, who.querySelector('#saveInd')||who.firstChild);
     setCloudStatus('waiting');
   }
-  // Butang Simpan Kekal (Admin sahaja)
+
+  // ── Simpan Kekal (ADMIN sahaja) ───────────────────────────────────
   if(session.role==='Admin'){
-    const who=$('.topbar .who');
-    if(who&&!$('#btnSimpanKekal')){
-      const wrap=document.createElement('span');
-      wrap.style.cssText='display:flex;flex-direction:column;align-items:center;gap:1px';
-      wrap.innerHTML=`<button id="btnSimpanKekal" style="background:#1A5FAD;color:#fff;border:none;border-radius:8px;padding:5px 12px;font-size:.72rem;font-weight:700;cursor:pointer;white-space:nowrap">💾 Simpan Kekal</button><span id="lastSavedStamp" style="font-size:.62rem;color:var(--ink-soft)"></span>`;
-      who.insertBefore(wrap, who.querySelector('#saveInd')||who.firstChild);
-      $('#btnSimpanKekal').addEventListener('click', simpanPermanen);
-    }
+    const wrap=document.createElement('span');
+    wrap.id='btnSimpanKekal';
+    wrap.style.cssText='display:flex;flex-direction:column;align-items:center;gap:1px';
+    wrap.innerHTML=`<button style="background:#1A5FAD;color:#fff;border:none;border-radius:8px;padding:5px 12px;font-size:.72rem;font-weight:700;cursor:pointer;white-space:nowrap">💾 Simpan Kekal</button><span id="lastSavedStamp" style="font-size:.62rem;color:var(--ink-soft)"></span>`;
+    who.insertBefore(wrap, who.querySelector('#saveInd')||who.firstChild);
+    wrap.querySelector('button').addEventListener('click', simpanPermanen);
   }
+
   go(tabs[0].id);
 }
 function go(tabId){
@@ -1119,45 +1129,60 @@ function renderUploadTab(){
 }
 /* ── CLOUD SYNC CONFIGURATION SECTION ──────────────────────────────── */
 function renderCloudCfgSection(){
-  const cfg=getCloudCfg()||{};
+  const cfg=getCloudCfg();
+  const isDefault=(cfg.url===_SB_URL);
+  const isOverride=!isDefault;
   const wrap=document.createElement('div');
   wrap.id='cloudCfgSection';
-  wrap.style.cssText='margin-top:28px;border:2px solid #E0E0E0;border-radius:12px;overflow:hidden';
-  const isConfigured=!!(cfg.url&&cfg.key);
+  wrap.style.cssText='margin-top:28px;border:2px solid #1A5FAD;border-radius:12px;overflow:hidden';
   wrap.innerHTML=`
     <div style="background:#1A5FAD;color:#fff;padding:12px 18px;display:flex;align-items:center;gap:10px">
       <div style="font-size:1.1rem">☁</div>
       <div><div style="font-weight:700;font-size:.9rem">Cloud Sync — Supabase</div>
-        <div style="font-size:.75rem;opacity:.85">Kongsi data secara live antara semua pengguna (Panel, Admin, Pembimbing)</div></div>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
-        <span id="cloudStatusBadge" style="font-size:.72rem;font-weight:700;padding:2px 9px;border-radius:12px;background:${isConfigured?'#22c55e':'#888'};color:#fff">
-          ${isConfigured?'✓ Dikonfigurasi':'✗ Belum dikonfigurasi'}
-        </span>
-      </div>
+        <div style="font-size:.75rem;opacity:.85">Data dikongsi secara live antara semua pengguna</div></div>
+      <span style="margin-left:auto;font-size:.72rem;font-weight:700;padding:2px 9px;border-radius:12px;background:#22c55e;color:#fff">
+        ✓ Auto-Connected
+      </span>
     </div>
     <div style="padding:18px">
-      ${isConfigured?`
-        <div style="background:#EEF9F0;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.82rem">
-          <div style="font-weight:700;color:#1F8A4C;margin-bottom:4px">✓ Cloud Sync Aktif</div>
-          <div style="color:#444">URL: <span style="font-family:monospace">${cfg.url}</span></div>
-        </div>` : `
-        <div style="background:#FFF8E1;border:1px solid #F59E0B;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.82rem;color:#92400E">
-          ⚠ Cloud Sync belum dikonfigurasi. Data hanya tersimpan dalam pelayar masing-masing.
-        </div>`}
+      <!-- Status auto-connect -->
+      <div style="background:#EEF9F0;border:1px solid #86efac;border-radius:8px;padding:12px 14px;margin-bottom:16px">
+        <div style="font-weight:700;color:#15803d;margin-bottom:4px">✓ Supabase tersambung secara automatik</div>
+        <div style="font-size:.8rem;color:#444">
+          URL: <code style="background:#f0fdf4;padding:1px 6px;border-radius:4px;font-size:.75rem">${cfg.url}</code><br>
+          <span style="font-size:.78rem;color:#666;margin-top:4px;display:block">
+            ${isDefault?'Menggunakan konfigurasi lalai yang di-hardcode dalam sistem.':'⚙ Menggunakan konfigurasi override.'}
+          </span>
+        </div>
+      </div>
       
-      <!-- SQL Setup Instructions -->
+      <!-- Info aliran data -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">
+        <div style="background:var(--bg2);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem;margin-bottom:4px">👨‍💼</div>
+          <div style="font-size:.78rem;font-weight:700">Admin</div>
+          <div style="font-size:.7rem;color:var(--ink-soft)">Kemaskini data → terus ke cloud</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem;margin-bottom:4px">⚡</div>
+          <div style="font-size:.78rem;font-weight:700">Supabase</div>
+          <div style="font-size:.7rem;color:var(--ink-soft)">Data dikongsi 1–4 saat</div>
+        </div>
+        <div style="background:var(--bg2);border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:1.2rem;margin-bottom:4px">👥</div>
+          <div style="font-size:.78rem;font-weight:700">Panel / Pembimbing</div>
+          <div style="font-size:.7rem;color:var(--ink-soft)">Dapat live update automatik</div>
+        </div>
+      </div>
+      
+      <!-- SQL Setup -->
       <details style="margin-bottom:14px">
-        <summary style="cursor:pointer;font-weight:700;font-size:.83rem;color:#1A5FAD;padding:6px 0">
-          📋 Langkah 1 — Persediaan Supabase (klik untuk buka)
+        <summary style="cursor:pointer;font-size:.82rem;font-weight:700;color:#1A5FAD;padding:6px 0">
+          📋 Persediaan Supabase (jalankan SQL ini sekali sahaja)
         </summary>
-        <div style="background:#F8F8F8;border-radius:8px;padding:14px;margin-top:8px;font-size:.8rem;line-height:1.8">
-          <div style="font-weight:700;margin-bottom:8px">Ikut langkah ini (sekali sahaja):</div>
-          <ol style="padding-left:16px;margin:0">
-            <li>Pergi ke <a href="https://supabase.com" target="_blank" style="color:#1A5FAD">supabase.com</a> → Daftar percuma</li>
-            <li>Buat projek baharu → Pilih wilayah Asia (Singapore)</li>
-            <li>Klik <b>SQL Editor</b> → <b>New query</b> → tampal SQL ini → klik <b>Run</b>:</li>
-          </ol>
-          <div style="background:#1A1A1A;color:#e2e8f0;border-radius:6px;padding:10px 12px;margin:10px 0;font-family:monospace;font-size:.75rem;line-height:1.7;white-space:pre-wrap" id="sqlBlock">CREATE TABLE IF NOT EXISTS rkb_state (
+        <div style="background:#F8F8F8;border-radius:8px;padding:12px;margin-top:8px;font-size:.8rem">
+          <div style="margin-bottom:8px;color:#444">Pergi ke <b>Supabase → SQL Editor → New query</b>, tampal dan klik <b>Run</b>:</div>
+          <div style="background:#1A1A1A;color:#e2e8f0;border-radius:6px;padding:10px 12px;font-family:monospace;font-size:.75rem;line-height:1.7;white-space:pre-wrap" id="sqlBlock">CREATE TABLE IF NOT EXISTS rkb_state (
   id text PRIMARY KEY DEFAULT 'main',
   data jsonb NOT NULL,
   updated_by text DEFAULT 'system',
@@ -1167,94 +1192,70 @@ ALTER TABLE rkb_state ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "allow_all" ON rkb_state TO anon
   USING (true) WITH CHECK (true);
 ALTER PUBLICATION supabase_realtime ADD TABLE rkb_state;</div>
-          <button class="btn sm" style="font-size:.72rem;padding:4px 10px" onclick="navigator.clipboard.writeText($('#sqlBlock').textContent).then(()=>toast('SQL disalin ✓','ok'))">📋 Salin SQL</button>
-          <ol style="padding-left:16px;margin:10px 0 0" start="4">
-            <li>Klik <b>Project Settings</b> → <b>API</b></li>
-            <li>Salin <b>Project URL</b> dan <b>anon/public key</b></li>
-            <li>Masukkan dalam kotak di bawah → klik Uji & Simpan</li>
-          </ol>
+          <button class="btn sm" style="font-size:.72rem;padding:4px 10px;margin-top:8px" onclick="navigator.clipboard.writeText($('#sqlBlock').textContent).then(()=>toast('SQL disalin ✓','ok'))">📋 Salin SQL</button>
         </div>
       </details>
+      
+      <!-- Butang actions -->
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn" style="background:#1F8A4C" id="cloudPushNow">↑ Push Data Semasa ke Cloud</button>
+        <button class="btn" style="background:#1A5FAD" id="btnJanaNetlify">📥 Jana Fail Netlify (dengan Cloud Config)</button>
+      </div>
 
-      <!-- Input URL + Key -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-        <div>
-          <div style="font-size:.78rem;font-weight:700;color:#1A5FAD;margin-bottom:4px">Supabase URL</div>
-          <input id="cloudUrlIn" class="inp" placeholder="https://xxxxx.supabase.co" value="${cfg.url||''}" style="width:100%;font-size:.8rem">
+      <!-- Override section (collapsible) -->
+      <details>
+        <summary style="cursor:pointer;font-size:.78rem;color:#888;padding:4px 0">⚙ Tukar konfigurasi Supabase (optional)</summary>
+        <div style="margin-top:10px;padding:12px;background:var(--bg2);border-radius:8px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+            <div>
+              <div style="font-size:.75rem;font-weight:700;margin-bottom:4px">Supabase URL</div>
+              <input id="cloudUrlIn" class="inp" value="${cfg.url}" style="width:100%;font-size:.78rem">
+            </div>
+            <div>
+              <div style="font-size:.75rem;font-weight:700;margin-bottom:4px">Anon Key</div>
+              <input id="cloudKeyIn" class="inp" value="${cfg.key}" style="width:100%;font-size:.78rem;font-family:monospace" type="password">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn sm" style="background:#1A5FAD" id="cloudSaveBtn">Uji & Simpan Override</button>
+            ${isOverride?`<button class="btn sm" style="background:#888" id="cloudResetBtn">Reset ke Default</button>`:''}
+            <span id="cloudTestResult" style="font-size:.78rem"></span>
+          </div>
         </div>
-        <div>
-          <div style="font-size:.78rem;font-weight:700;color:#1A5FAD;margin-bottom:4px">Anon Key (public)</div>
-          <input id="cloudKeyIn" class="inp" placeholder="eyJhbGci…" value="${cfg.key||''}" style="width:100%;font-size:.8rem;font-family:monospace" type="password">
-        </div>
-      </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn" style="background:#1A5FAD" id="cloudSaveBtn">☁ Uji Sambungan & Simpan</button>
-        ${isConfigured?`<button class="btn" style="background:#CC0000" id="cloudClearBtn">✗ Nyahkonfigurasi Cloud</button>`:''}
-        <button class="btn" style="background:#1F8A4C" id="cloudPushNow">↑ Push Data Sekarang</button>
-        <span id="cloudTestResult" style="font-size:.8rem;display:flex;align-items:center;gap:6px"></span>
-      </div>
-      ${isConfigured?`
-      <div style="margin-top:12px;padding:10px 14px;background:#EEF4FF;border-radius:8px;font-size:.78rem;color:#444">
-        <b>Cara guna:</b> Setelah dikonfigurasi, semua pengguna yang akses dashboard ini akan nampak data yang sama.
-        Perubahan oleh sesiapa akan dikemas kini dalam masa <b>1–4 saat</b> bagi semua pengguna lain secara automatik.
-      </div>`:''}
+      </details>
     </div>`;
 
-  // Append to content
   $('#content').appendChild(wrap);
 
-  // Wire buttons
+  $('#cloudPushNow').addEventListener('click',async function(){withBusy(this,async()=>{
+    setCloudStatus('syncing');
+    await pushToCloud();
+    toast('Data berjaya ditolak ke cloud ✓','ok');
+  });});
+
+  $('#btnJanaNetlify').addEventListener('click',async function(){withBusy(this,async()=>{
+    await pushToCloud(); simpanPermanen();
+  });});
+
   $('#cloudSaveBtn').addEventListener('click',async function(){withBusy(this,async()=>{
     const url=$('#cloudUrlIn').value.trim();
     const key=$('#cloudKeyIn').value.trim();
     if(!url||!key){ toast('Sila masukkan URL dan Key','warn'); return; }
     const res=$('#cloudTestResult');
-    res.innerHTML='<span style="color:#f59e0b">Menguji sambungan…</span>';
+    res.innerHTML='<span style="color:#f59e0b">Menguji…</span>';
     const ok=await testCloudConn(url,key);
     if(ok){
-      setCloudCfg({url,key});
-      res.innerHTML='<span style="color:#22c55e;font-weight:700">✓ Berjaya! Config disimpan.</span>';
-      toast('Cloud Sync dikonfigurasi! Menolak data ke cloud…','ok');
-      await pushToCloud();
-      setupRealtime();
-      // Tunjuk arahan seterusnya
-      const nextStep=document.createElement('div');
-      nextStep.style.cssText='margin-top:14px;background:#EEF4FF;border:2px solid #1A5FAD;border-radius:10px;padding:14px 16px';
-      nextStep.innerHTML=`
-        <div style="font-weight:700;color:#1A5FAD;margin-bottom:8px">✅ Langkah seterusnya — Jana fail untuk Netlify</div>
-        <div style="font-size:.82rem;color:#444;margin-bottom:12px">
-          Klik butang di bawah untuk muat turun fail HTML baharu yang mengandungi konfigurasi Supabase.
-          Upload fail ini ke Netlify — <b>semua pengguna yang akses URL akan dapat live data secara automatik</b> tanpa perlu setup apa-apa.
-        </div>
-        <button class="btn" style="background:#1A5FAD;font-size:.82rem" id="btnJanaNetlify">
-          📥 Jana & Muat Turun Fail Netlify
-        </button>
-        <div style="font-size:.75rem;color:#666;margin-top:8px">
-          Nama fail: <code>dashboard_rkb_netlify_TARIKH.html</code>
-        </div>`;
-      document.getElementById('cloudCfgSection').querySelector('div[style*="padding:18px"]').appendChild(nextStep);
-      document.getElementById('btnJanaNetlify').addEventListener('click',function(){
-        withBusy(this,async()=>{ await pushToCloud(); simpanPermanen(); });
-      });
+      setCloudCfg({url,key}); res.innerHTML='<span style="color:#22c55e">✓ Berjaya</span>';
+      toast('Override disimpan! Menolak data…','ok');
+      await pushToCloud(); setupRealtime(); renderUploadTab();
     } else {
-      res.innerHTML='<span style="color:#CC0000;font-weight:700">✗ Gagal — Semak URL dan Key. Pastikan SQL telah dijalankan di Supabase.</span>';
+      res.innerHTML='<span style="color:#CC0000">✗ Gagal — semak URL dan Key</span>';
     }
   });});
 
-  const clrBtn=$('#cloudClearBtn');
-  if(clrBtn) clrBtn.addEventListener('click',()=>{
-    if(!confirm('Nyahkonfigurasi Cloud Sync? Data akan kembali ke localStorage sahaja.')) return;
-    clearCloudCfg(); toast('Cloud Sync dimatikan','warn'); renderUploadTab();
-  });
-
-  $('#cloudPushNow').addEventListener('click',async function(){withBusy(this,async()=>{
-    const cfg2=getCloudCfg();
-    if(!cfg2||!cfg2.url||!cfg2.key){ toast('Cloud belum dikonfigurasi','warn'); return; }
-    await pushToCloud(); toast('Data berjaya ditolak ke cloud ✓','ok');
-  });});
+  const rstBtn=$('#cloudResetBtn');
+  if(rstBtn) rstBtn.addEventListener('click',()=>{ clearCloudCfg(); toast('Reset ke default','ok'); renderUploadTab(); });
 }
-
-
 function parseCSVsemicolon(text){ text=text.replace(/^\uFEFF/,''); const rows=[]; let row=[],cur='',q=false;
   for(let i=0;i<text.length;i++){const ch=text[i]; if(q){if(ch==='"'){if(text[i+1]==='"'){cur+='"';i++;}else q=false;}else cur+=ch;}
   else{if(ch==='"')q=true; else if(ch===';'){row.push(cur);cur='';}else if(ch==='\n'){row.push(cur);rows.push(row);row=[];cur='';}else if(ch==='\r'){}else cur+=ch;}}
