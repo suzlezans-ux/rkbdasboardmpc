@@ -278,6 +278,15 @@ let _lastPullAt  = '';     // timestamp cloud terakhir ditarik
 let _realtimeCh  = null;   // supabase realtime channel
 
 function getCloudCfg(){
+  // 1. Config di-embed dalam HTML (oleh Admin — disebarkan ke semua pengguna)
+  try{
+    const emb=document.getElementById('__sb_cfg__');
+    if(emb&&emb.textContent.trim()){
+      const c=JSON.parse(emb.textContent);
+      if(c&&c.url&&c.key) return c;
+    }
+  }catch(e){}
+  // 2. Config dalam localStorage (semasa konfigurasi)
   try{ return JSON.parse(localStorage.getItem(CLOUD_KEY))||{}; }catch(e){ return {}; }
 }
 function setCloudCfg(obj){
@@ -663,18 +672,11 @@ function doLogin(){
   if(!found){ err.textContent='Nama pengguna atau kata laluan tidak sah.'; err.classList.remove('hidden'); return; }
   err.classList.add('hidden'); session={username:found.username, role:found.role};
   $('#luser').value=''; $('#lpass').value='';
+  $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
+  buildShell();
+  // Start realtime sync selepas login (state sudah dimuatkan oleh initApp)
   const cfg=getCloudCfg();
-  if(cfg&&cfg.url&&cfg.key){
-    // Tunjuk loading sementara fetch dari cloud
-    $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
-    document.getElementById('content')||($('#app').innerHTML='<div id="content"></div>');
-    if($('#content')) $('#content').innerHTML=`<div style="padding:60px;text-align:center;color:var(--ink-soft)"><div style="font-size:2rem;margin-bottom:16px">☁</div><div>Memuatkan data terkini dari cloud…</div></div>`;
-    buildShell();
-    initCloudSync().then(()=>{ if(typeof go==='function') go(tabsForRole()[0].id); });
-  } else {
-    $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
-    buildShell();
-  }
+  if(cfg&&cfg.url&&cfg.key) setupRealtime();
 }
 function logout(){
   session=null; tabUnlocked={}; $('#app').classList.add('hidden'); $('#login').classList.remove('hidden');
@@ -759,33 +761,38 @@ function simpanPermanen(){
     const now=new Date();
     const stamp=now.toLocaleDateString('ms-MY',{day:'2-digit',month:'long',year:'numeric'})+
                 ' '+now.toLocaleTimeString('ms-MY',{hour:'2-digit',minute:'2-digit'});
-    // Baca HTML semasa
     const htmlEl=document.documentElement.cloneNode(true);
-    // Buang embedded state lama (jika ada)
-    const oldEmb=htmlEl.querySelector('#__rkb_saved_state__');
-    if(oldEmb) oldEmb.remove();
-    // Tambah embedded state baharu sebagai script tag
-    const scr=document.createElement('script');
-    scr.id='__rkb_saved_state__';
-    scr.type='application/json';
-    scr.textContent=stateJson;
-    htmlEl.querySelector('head').appendChild(scr);
-    // Jana nama fail dengan tarikh
+    // Buang loader jika ada
+    const ldr=htmlEl.querySelector('#initLoader'); if(ldr) ldr.remove();
+    // Embed state
+    const oldSt=htmlEl.querySelector('#__rkb_saved_state__'); if(oldSt) oldSt.remove();
+    const stScr=document.createElement('script');
+    stScr.id='__rkb_saved_state__'; stScr.type='application/json'; stScr.textContent=stateJson;
+    htmlEl.querySelector('head').appendChild(stScr);
+    // Embed Supabase config (supaya semua pengguna auto-connect tanpa setup)
+    const cloudCfg=getCloudCfg();
+    const oldCfg=htmlEl.querySelector('#__sb_cfg__'); if(oldCfg) oldCfg.remove();
+    if(cloudCfg&&cloudCfg.url&&cloudCfg.key){
+      const cfgScr=document.createElement('script');
+      cfgScr.id='__sb_cfg__'; cfgScr.type='application/json';
+      cfgScr.textContent=JSON.stringify({url:cloudCfg.url,key:cloudCfg.key});
+      htmlEl.querySelector('head').appendChild(cfgScr);
+    }
+    // Nama fail dengan tarikh
     const d=now.toISOString().slice(0,10);
-    const fname=`dashboard_rkb_${d}.html`;
-    // Muat turun
+    const hasCfg=!!(cloudCfg&&cloudCfg.url&&cloudCfg.key);
+    const fname=`dashboard_rkb${hasCfg?'_netlify':'_offline'}_${d}.html`;
     const blob=new Blob(['<!DOCTYPE html>\n'+htmlEl.outerHTML],{type:'text/html;charset=utf-8'});
     const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url; a.download=fname; a.click();
+    const a=document.createElement('a'); a.href=url; a.download=fname; a.click();
     URL.revokeObjectURL(url);
-    toast(`✓ Disimpan permanen — ${fname}\nData tersimpan dalam fail. Guna fail ini untuk akses data yang sama.`,'ok');
-    // Kemas kini indicator
+    const msg=hasCfg
+      ?`✓ ${fname}\nFail ini mengandungi konfigurasi Supabase.\nUpload ke Netlify — semua pengguna akan dapat live data secara automatik.`
+      :`✓ ${fname}\nData tersimpan dalam fail (tiada cloud sync).`;
+    toast(msg,'ok');
     const ind=document.getElementById('lastSavedStamp');
     if(ind) ind.textContent='Kekal: '+stamp;
-  }catch(e){
-    toast('⚠ Gagal simpan: '+e.message,'warn');
-  }
+  }catch(e){ toast('⚠ Gagal simpan: '+e.message,'warn'); }
 }
 /* ── APP SHELL ── */
 function buildShell(){
@@ -1202,18 +1209,35 @@ ALTER PUBLICATION supabase_realtime ADD TABLE rkb_state;</div>
     const key=$('#cloudKeyIn').value.trim();
     if(!url||!key){ toast('Sila masukkan URL dan Key','warn'); return; }
     const res=$('#cloudTestResult');
-    res.innerHTML='<span style="color:#f59e0b">Menguji…</span>';
+    res.innerHTML='<span style="color:#f59e0b">Menguji sambungan…</span>';
     const ok=await testCloudConn(url,key);
     if(ok){
       setCloudCfg({url,key});
-      res.innerHTML='<span style="color:#22c55e">✓ Berjaya! Menyimpan konfigurasi…</span>';
+      res.innerHTML='<span style="color:#22c55e;font-weight:700">✓ Berjaya! Config disimpan.</span>';
       toast('Cloud Sync dikonfigurasi! Menolak data ke cloud…','ok');
-      // Push data semasa ke cloud
       await pushToCloud();
       setupRealtime();
-      renderUploadTab();
+      // Tunjuk arahan seterusnya
+      const nextStep=document.createElement('div');
+      nextStep.style.cssText='margin-top:14px;background:#EEF4FF;border:2px solid #1A5FAD;border-radius:10px;padding:14px 16px';
+      nextStep.innerHTML=`
+        <div style="font-weight:700;color:#1A5FAD;margin-bottom:8px">✅ Langkah seterusnya — Jana fail untuk Netlify</div>
+        <div style="font-size:.82rem;color:#444;margin-bottom:12px">
+          Klik butang di bawah untuk muat turun fail HTML baharu yang mengandungi konfigurasi Supabase.
+          Upload fail ini ke Netlify — <b>semua pengguna yang akses URL akan dapat live data secara automatik</b> tanpa perlu setup apa-apa.
+        </div>
+        <button class="btn" style="background:#1A5FAD;font-size:.82rem" id="btnJanaNetlify">
+          📥 Jana & Muat Turun Fail Netlify
+        </button>
+        <div style="font-size:.75rem;color:#666;margin-top:8px">
+          Nama fail: <code>dashboard_rkb_netlify_TARIKH.html</code>
+        </div>`;
+      document.getElementById('cloudCfgSection').querySelector('div[style*="padding:18px"]').appendChild(nextStep);
+      document.getElementById('btnJanaNetlify').addEventListener('click',function(){
+        withBusy(this,async()=>{ await pushToCloud(); simpanPermanen(); });
+      });
     } else {
-      res.innerHTML='<span style="color:#CC0000">✗ Gagal — Semak URL dan Key, pastikan SQL telah dijalankan</span>';
+      res.innerHTML='<span style="color:#CC0000;font-weight:700">✗ Gagal — Semak URL dan Key. Pastikan SQL telah dijalankan di Supabase.</span>';
     }
   });});
 
@@ -2092,8 +2116,27 @@ buildShell=function(){ _origBuild();
   const f=$('.sb-foot');if(!f)return;
   f.innerHTML=`RKB 2025/2026 · Pejabat RKB<br><span class="mono" id="sbVer">${APP_VER}</span>`;};
 
-loadState();
-initLogin();
+/* ── AUTO-INIT: muatkan data dari cloud sebelum login ─────────────────
+   Sesiapa yang buka URL (Netlify) akan terus dapat data terkini dari
+   Supabase tanpa perlu konfigurasi apa-apa. Config di-embed dalam HTML.
+   ──────────────────────────────────────────────────────────────────── */
+(async function initApp(){
+  // 1. Cuba muat dari cloud (jika config ada dalam HTML)
+  const cfg=getCloudCfg();
+  if(cfg&&cfg.url&&cfg.key){
+    const loader=document.createElement('div');
+    loader.id='initLoader';
+    loader.style.cssText='position:fixed;inset:0;background:rgba(255,255,255,.95);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:12px';
+    loader.innerHTML='<div style="font-size:2.5rem">☁</div><div style="font-size:1rem;color:#1A5FAD;font-weight:700">Menyambung ke cloud…</div><div style="font-size:.82rem;color:#888">Memuatkan data terkini dari Supabase</div>';
+    document.body.appendChild(loader);
+    const row=await pullFromCloud();
+    if(row&&row.data){ state=row.data; mergeDefaults(); saveState(); }
+    else { loadState(); }
+    loader.remove();
+  } else { loadState(); }
+  computeRanks();
+  initLogin();
+})();
 
 </script>
 </body>
