@@ -225,7 +225,7 @@ table.dt tbody tr:hover{background:#F5F8FC}
   <aside class="sidebar" id="sidebar">
     <div class="sb-brand" id="sbBrand"></div>
     <nav class="sb-nav" id="sbNav"></nav>
-    <div class="sb-foot">RKB 2025/2026 · Pejabat RKB<br><span id="sbVer"></span></div>
+    <div class="sb-foot">RKB 2025/2026 · Sekretariat RKB<br><span id="sbVer"></span></div>
   </aside>
   <div class="main">
     <div class="topbar">
@@ -2115,7 +2115,7 @@ $('#logoutBtn').addEventListener('click',logout);
 const _origBuild=buildShell;
 buildShell=function(){ _origBuild();
   const f=$('.sb-foot');if(!f)return;
-  f.innerHTML=`RKB 2025/2026 · Pejabat RKB<br><span class="mono" id="sbVer">${APP_VER}</span>`;};
+  f.innerHTML=`RKB 2025/2026 · Sekretariat RKB<br><span class="mono" id="sbVer">${APP_VER}</span>`;};
 
 /* ── AUTO-INIT: muatkan data dari cloud sebelum login ─────────────────
    Sesiapa yang buka URL (Netlify) akan terus dapat data terkini dari
